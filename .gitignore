@@ -1,0 +1,93 @@
+# Python
+*/__pycache__/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+htmlcov/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Data (user-specific)
+data/*.json
+data/*.sqlite
+data/*.sqlite3
+data/*.db
+data/*.sqlite-*
+data/*.sqlite3-*
+data/*.db-*
+data/media/
+data/videos/
+!data/.gitkeep
+
+# Project-specific data (user-generated, not version controlled)
+data/projects/*/content_plan.md
+data/projects/*/settings.json
+data/projects/*/secrets.json
+data/projects/*/reviews.json
+data/projects/**/*.json
+data/projects/**/*.md
+**/secrets.json
+
+# Logs
+*.log
+logs/
+.coverage
+coverage.xml
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.bak
+
+# ── GSD baseline (auto-generated) ──
+.gsd
+.gsd-id
+.mcp.json
+!.mcp.example.json
+.bg-shell/
+*.code-workspace
+.env.*
+!.env.example
+node_modules/
+.next/
+*.pyc
+target/
+vendor/
+coverage/
+.cache/
+tmp/

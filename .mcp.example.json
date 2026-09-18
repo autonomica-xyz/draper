@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "draper": {
+      "command": "python3",
+      "args": ["-m", "mcp_server"],
+      "cwd": "/path/to/draper",
+      "env": {
+        "DRAPER_MCP_PROJECT_ID": "your-project-id",
+        "DRAPER_MCP_TOKEN": "",
+        "DRAPER_MCP_ROLE": "editor"
+      }
+    }
+  }
+}

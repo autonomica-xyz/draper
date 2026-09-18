@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nostr Signing — Draper Dashboard</title>
+    <style>
+        :root {
+            --bg: #0b0d12; --panel: #141822; --border: #232a38;
+            --text: #e6e9f0; --muted: #8b93a7; --accent: #9333EA;
+            --ok: #10B981; --warn: #F59E0B; --err: #EF4444;
+        }
+        [data-theme="light"] {
+            --bg: #f6f7fb; --panel: #ffffff; --border: #e3e6ee;
+            --text: #1a2030; --muted: #5b6478;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; background: var(--bg); color: var(--text);
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            min-height: 100vh; padding: 24px;
+        }
+        .wrap { max-width: 780px; margin: 0 auto; }
+        h1 { font-size: 22px; margin: 0 0 4px; }
+        .sub { color: var(--muted); font-size: 14px; margin-bottom: 20px; }
+        .banner {
+            border: 1px solid var(--border); border-radius: 10px;
+            background: var(--panel); padding: 14px 16px; margin-bottom: 18px;
+            font-size: 14px; line-height: 1.5;
+        }
+        .banner.err { border-color: var(--err); }
+        .banner.ok { border-color: var(--ok); }
+        .card {
+            border: 1px solid var(--border); border-radius: 10px;
+            background: var(--panel); padding: 16px; margin-bottom: 14px;
+        }
+        .card-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+        .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--muted); }
+        .content {
+            white-space: pre-wrap; margin: 10px 0; font-size: 14px; line-height: 1.55;
+            max-height: 260px; overflow-y: auto;
+        }
+        .tags { margin-bottom: 10px; }
+        .tag {
+            display: inline-block; background: rgba(147,51,234,.15); color: var(--accent);
+            border-radius: 999px; padding: 2px 10px; font-size: 12px; margin: 0 6px 6px 0;
+        }
+        .status { font-size: 12px; font-weight: 600; }
+        .status.pending_signature { color: var(--warn); }
+        .status.signed { color: var(--ok); }
+        .status.published { color: var(--ok); }
+        .status.publish_failed { color: var(--err); }
+        .status.cancelled { color: var(--muted); }
+        button {
+            border: 0; border-radius: 8px; padding: 9px 16px; font-size: 14px;
+            font-weight: 600; cursor: pointer; color: #fff; background: var(--accent);
+        }
+        button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+        button:disabled { opacity: .5; cursor: not-allowed; }
+        button.small { padding: 5px 12px; font-size: 12px; }
+        .meta { color: var(--muted); font-size: 12px; margin-top: 8px; }
+        .error-text { color: var(--err); font-size: 13px; margin-top: 8px; }
+        .actions { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+        a { color: var(--accent); }
+        .spinner {
+            display: inline-block; width: 13px; height: 13px; border-radius: 50%;
+            border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+            animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <h1>Nostr Signing</h1>
+    <div class="sub">
+        Sign approved content with your Nostr browser extension (NIP-07: nos2x, Alby, …).
+        Signed events are published automatically at their scheduled time — the server never
+        holds your private key.
+    </div>
+
+    <div id="ext-banner" class="banner" hidden></div>
+
+    <div class="actions" style="margin-bottom: 16px;">
+        <button id="sign-all" disabled>Sign all pending</button>
+        <button id="reload" class="secondary">Refresh</button>
+    </div>
+
+    <div id="requests"></div>
+    <div id="empty" class="banner" hidden>No pending Nostr signing requests.</div>
+
+    <p class="sub" style="margin-top:24px">
+        <a href="/">← Back to dashboard</a>
+        &nbsp;·&nbsp; Relays and identities are configured per project under Settings → Integrations.
+    </p>
+</div>
+
+<script>
+(function () {
+    const projectId = "{{ project_id }}";
+    const requestsEl = document.getElementById('requests');
+    const emptyEl = document.getElementById('empty');
+    const bannerEl = document.getElementById('ext-banner');
+    const signAllBtn = document.getElementById('sign-all');
+    let csrfToken = '';
+
+    function showBanner(message, kind) {
+        bannerEl.hidden = false;
+        bannerEl.textContent = message;
+        bannerEl.className = 'banner' + (kind ? ' ' + kind : '');
+    }
+
+    async function ensureCsrf() {
+        if (csrfToken) return csrfToken;
+        try {
+            const r = await fetch('/api/csrf-token');
+            const d = await r.json();
+            if (d.success && d.csrf_token) csrfToken = d.csrf_token;
+        } catch (e) { /* ignore */ }
+        return csrfToken;
+    }
+
+    async function api(path, options) {
+        options = options || {};
+        if (options.method && options.method !== 'GET') {
+            const token = await ensureCsrf();
+            options.headers = Object.assign({}, options.headers || {}, {
+                'Content-Type': 'application/json',
+                'x-csrf-token': token,
+            });
+        }
+        const response = await fetch(path, options);
+        let data = {};
+        try { data = await response.json(); } catch (e) { /* ignore */ }
+        if (!response.ok || data.success === false) {
+            throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        return data;
+    }
+
+    function fmtWhen(iso) {
+        if (!iso) return 'as soon as signed';
+        try { return new Date(iso).toLocaleString(); } catch (e) { return iso; }
+    }
+
+    function cardHtml(record) {
+        const events = record.unsigned_events || [];
+        const tags = [];
+        events.forEach(ev => (ev.tags || []).forEach(t => {
+            if (t[0] === 't' && !tags.includes(t[1])) tags.push(t[1]);
+        }));
+        const preview = events.map(ev => {
+            const label = ev.kind === 30023 ? 'Long-form' : (events.length > 1 ? 'Note' : '');
+            const head = label ? '<div class="mono">' + label + ' · kind ' + ev.kind + '</div>' : '';
+            return head + '<div class="content">' + escapeHtml(ev.content || '') + '</div>';
+        }).join('');
+        return (
+            '<div class="card" data-request="' + record.request_id + '">' +
+              '<div class="card-head">' +
+                '<span class="mono">' + record.request_id + '</span>' +
+                '<span class="status ' + record.status + '">' + record.status.replace(/_/g, ' ') + '</span>' +
+              '</div>' +
+              '<div class="tags">' + tags.map(t => '<span class="tag">#' + escapeHtml(t) + '</span>').join('') + '</div>' +
+              preview +
+              '<div class="meta">Publishes ' + escapeHtml(fmtWhen(record.scheduled_at)) +
+                  ' · relays: ' + escapeHtml((record.relays || []).join(', ')) + '</div>' +
+              (record.last_error ? '<div class="error-text">' + escapeHtml(record.last_error) + '</div>' : '') +
+              (record.event_uri ? '<div class="meta"><a href="' + escapeHtml(record.event_uri) + '">' +
+                  escapeHtml(record.event_uri) + '</a></div>' : '') +
+              '<div class="actions">' +
+                (record.status === 'pending_signature'
+                    ? '<button class="small sign-btn">Sign &amp; schedule</button>' : '') +
+                (['pending_signature', 'signed', 'publish_failed'].includes(record.status)
+                    ? '<button class="small secondary cancel-btn">Cancel</button>' : '') +
+                (record.status === 'signed'
+                    ? '<button class="small publish-btn">Publish now</button>' : '') +
+              '</div>' +
+            '</div>'
+        );
+    }
+
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function render(records) {
+        requestsEl.innerHTML = records.map(cardHtml).join('');
+        emptyEl.hidden = records.length > 0;
+        const pending = records.filter(r => r.status === 'pending_signature');
+        signAllBtn.disabled = pending.length === 0 || !(window.nostr && window.nostr.signEvent);
+
+        requestsEl.querySelectorAll('.sign-btn').forEach(btn => {
+            btn.addEventListener('click', () => signRequest(btn.closest('.card').dataset.request, btn));
+        });
+        requestsEl.querySelectorAll('.cancel-btn').forEach(btn => {
+            btn.addEventListener('click', () => cancelRequest(btn.closest('.card').dataset.request));
+        });
+        requestsEl.querySelectorAll('.publish-btn').forEach(btn => {
+            btn.addEventListener('click', () => publishDue(btn));
+        });
+    }
+
+    async function loadRequests() {
+        try {
+            const data = await api('/api/projects/' + encodeURIComponent(projectId) + '/nostr/signing-requests');
+            render(data.requests || []);
+        } catch (e) {
+            showBanner('Failed to load signing requests: ' + e.message, 'err');
+        }
+    }
+
+    async function signRequest(requestId, btn) {
+        const nostr = window.nostr;
+        if (!nostr || !nostr.signEvent) {
+            showBanner('No NIP-07 extension detected. Install nos2x or Alby and reload.', 'err');
+            return;
+        }
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span>Waiting for signature…';
+        try {
+            const data = await api('/api/projects/' + encodeURIComponent(projectId) +
+                                   '/nostr/signing-requests');
+            const record = (data.requests || []).find(r => r.request_id === requestId);
+            if (!record) throw new Error('request not found');
+
+            const signedEvents = [];
+            for (const unsignedEvent of (record.unsigned_events || [])) {
+                // NIP-07: signEvent takes exactly {kind, content, created_at, tags}
+                // and returns the event with pubkey/id/sig filled in.
+                const signed = await nostr.signEvent(unsignedEvent);
+                signedEvents.push(signed);
+            }
+
+            await api('/api/projects/' + encodeURIComponent(projectId) +
+                      '/nostr/signing-requests/' + encodeURIComponent(requestId) + '/signed', {
+                method: 'POST',
+                body: JSON.stringify({ events: signedEvents }),
+            });
+            showBanner('Signature verified and scheduled. It will be published at the scheduled time.', 'ok');
+        } catch (e) {
+            showBanner('Signing failed: ' + e.message, 'err');
+            if (btn) { btn.disabled = false; btn.textContent = 'Sign & schedule'; }
+        }
+        await loadRequests();
+    }
+
+    async function cancelRequest(requestId) {
+        try {
+            await api('/api/projects/' + encodeURIComponent(projectId) +
+                      '/nostr/signing-requests/' + encodeURIComponent(requestId) + '/cancel', {
+                method: 'POST', body: '{}',
+            });
+        } catch (e) {
+            showBanner('Cancel failed: ' + e.message, 'err');
+        }
+        await loadRequests();
+    }
+
+    async function publishDue(btn) {
+        if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Publishing…'; }
+        try {
+            await api('/api/projects/' + encodeURIComponent(projectId) + '/nostr/publish-due', {
+                method: 'POST', body: '{}',
+            });
+        } catch (e) {
+            showBanner('Publish failed: ' + e.message, 'err');
+        }
+        await loadRequests();
+    }
+
+    document.getElementById('reload').addEventListener('click', loadRequests);
+    signAllBtn.addEventListener('click', async () => {
+        const data = await api('/api/projects/' + encodeURIComponent(projectId) + '/nostr/signing-requests');
+        const pending = (data.requests || []).filter(r => r.status === 'pending_signature');
+        for (const record of pending) {
+            await signRequest(record.request_id, null);
+        }
+    });
+
+    // Extension detection: nos2x/Alby inject window.nostr, sometimes late.
+    function checkExtension() {
+        if (window.nostr && window.nostr.signEvent) {
+            showExtensionStatus();
+            signAllBtn.disabled = signAllBtn.disabled && false;
+            return;
+        }
+        showBanner('No Nostr extension detected yet — waiting for window.nostr (nos2x, Alby, …). ' +
+                   'Install one and reload this page.', 'err');
+        setTimeout(checkExtension, 1500);
+    }
+    async function showExtensionStatus() {
+        try {
+            const npub = await window.nostr.getPublicKey();
+            showBanner('Extension connected: ' + npub, 'ok');
+        } catch (e) {
+            showBanner('Extension detected but getPublicKey() was rejected.', 'err');
+        }
+    }
+
+    if (!projectId) {
+        showBanner('No project selected. Open this page from a project context.', 'err');
+    } else {
+        loadRequests();
+        checkExtension();
+    }
+})();
+</script>
+</body>
+</html>

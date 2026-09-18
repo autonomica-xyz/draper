@@ -1,0 +1,24 @@
+[Unit]
+Description=Draper Marketing Pipeline Worker
+After=network.target
+After=draper-dashboard.service
+
+[Service]
+Type=simple
+User=draper
+Group=draper
+WorkingDirectory=/opt/draper
+Environment=PATH=/opt/draper/.venv/bin:/usr/bin:/bin
+Environment=DRAPER_REQUIRE_AUTH=1
+EnvironmentFile=/etc/draper.env
+ExecStart=/opt/draper/.venv/bin/python -m worker --poll-interval 2.0
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/draper/data
+
+[Install]
+WantedBy=multi-user.target
