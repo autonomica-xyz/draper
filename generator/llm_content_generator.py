@@ -38,16 +38,21 @@ class LLMContentGenerator:
             strategies_path = str(Path(__file__).resolve().parent.parent)
         self.strategies_path = Path(strategies_path)
 
-        # Load marketing strategies
-        self.twitter_strategy = self._load_strategy_file("draper_twitter_strategy.md")
-        self.linkedin_strategy = self._load_strategy_file("draper_linkedin_strategy.md")
-        self.marketing_plan = self._load_strategy_file("draper_marketing_plan_enhanced.md")
+        # Store project first — strategy loading is project-gated.
+        self.project = project
+
+        # Global draper_* strategy docs are Draper-brand only. Non-Draper
+        # projects use content_plan + brand voice (see _extract_strategy_context).
+        self.twitter_strategy = ""
+        self.linkedin_strategy = ""
+        self.marketing_plan = ""
+        self._draper_strategies_loaded = False
+        self._loaded_strategy_filenames: list[str] = []
+        if self._is_draper_project():
+            self._ensure_draper_strategies()
 
         # Load brand voice skill from knowledge-work-plugins
         self.brand_voice_skill = self._load_brand_voice_skill()
-
-        # Store project reference for brand voice
-        self.project = project
 
         # Per-project LLM override (set by scoped_generator_for_project);
         # None means use the env LLM_MODEL + fallbacks path.
@@ -77,8 +82,93 @@ class LLMContentGenerator:
         """Load marketing strategy markdown file"""
         filepath = self.strategies_path / filename
         if filepath.exists():
+            loaded = getattr(self, "_loaded_strategy_filenames", None)
+            if loaded is None:
+                self._loaded_strategy_filenames = []
+                loaded = self._loaded_strategy_filenames
+            if filename not in loaded:
+                loaded.append(filename)
             with open(filepath, 'r') as f:
                 return f.read()
+        return ""
+
+    def _is_draper_project(self) -> bool:
+        """True only when the bound project is the Draper brand.
+
+        Prefer an explicit config/settings flag when present; otherwise match
+        slug / project_id / name for the draper brand only. Acme, Brandco,
+        and other brands must not receive global draper_* strategy injection.
+        """
+        if not self.project:
+            return False
+
+        for obj in (
+            self.project,
+            getattr(self.project, "config", None),
+            getattr(self.project, "settings", None),
+        ):
+            if obj is None:
+                continue
+            if isinstance(obj, dict):
+                if "use_draper_strategy" in obj:
+                    return bool(obj["use_draper_strategy"])
+            else:
+                flag = getattr(obj, "use_draper_strategy", None)
+                if flag is not None:
+                    return bool(flag)
+
+        for attr in ("slug", "project_id", "name"):
+            raw = str(getattr(self.project, attr, "") or "").strip().lower()
+            if not raw:
+                continue
+            if raw == "draper" or raw.startswith("draper-") or raw.startswith("draper_"):
+                return True
+            if attr == "name" and (raw == "draper" or raw.startswith("draper ")):
+                return True
+        return False
+
+    def _ensure_draper_strategies(self) -> None:
+        """Lazy-load global draper_* strategy files (Draper brand only)."""
+        if self._draper_strategies_loaded:
+            return
+        self.twitter_strategy = self._load_strategy_file("draper_twitter_strategy.md")
+        self.linkedin_strategy = self._load_strategy_file("draper_linkedin_strategy.md")
+        self.marketing_plan = self._load_strategy_file("draper_marketing_plan_enhanced.md")
+        self._draper_strategies_loaded = True
+
+    def _project_display_name(self) -> str:
+        """Human-readable project name for prompt framing."""
+        if not self.project:
+            return "this brand"
+        name = getattr(self.project, "name", None)
+        if name:
+            return str(name)
+        slug = getattr(self.project, "slug", None)
+        if slug:
+            return str(slug)
+        return "this brand"
+
+    def _load_project_content_plan(self) -> str:
+        """Load this project's content plan (SQLite / legacy file)."""
+        if not self.project:
+            return ""
+        project_id = getattr(self.project, "project_id", None)
+        if not project_id:
+            return ""
+        try:
+            from projects.manager import ProjectManager
+            pm = ProjectManager()
+            content = pm.get_content_plan(project_id)
+            if content and content.strip():
+                return content.strip()
+        except Exception:
+            pass
+        plan_path = self.strategies_path / "data" / "projects" / project_id / "content_plan.md"
+        if plan_path.exists():
+            try:
+                return plan_path.read_text().strip()
+            except Exception:
+                pass
         return ""
 
     def _load_brand_voice_skill(self) -> str:
@@ -648,12 +738,23 @@ FORMAT: Return ONLY the LinkedIn post content."""
         return prompt
 
     def _extract_strategy_context(self, pillar: str, platform: str) -> str:
-        """Extract relevant strategy context from marketing documents"""
-        strategy_doc = self.twitter_strategy if platform == "twitter" else self.linkedin_strategy
+        """Extract relevant strategy context from marketing documents.
+
+        Draper brand: global draper_* strategy files.
+        All other projects: that project's content_plan only (never draper_*).
+        """
+        if self._is_draper_project():
+            self._ensure_draper_strategies()
+            strategy_doc = self.twitter_strategy if platform == "twitter" else self.linkedin_strategy
+        else:
+            # Ignore any draper_* attrs left on a scoped copy of a Draper generator.
+            strategy_doc = self._load_project_content_plan()
 
         # Extract sections relevant to the pillar
         if not strategy_doc:
-            return "No specific strategy context available."
+            if self._is_draper_project():
+                return "No specific strategy context available."
+            return "Use the project's brand voice and content plan. Do not invent unrelated products."
 
         # Simple extraction - look for pillar mentions
         pillar_mentions = []
@@ -666,15 +767,27 @@ FORMAT: Return ONLY the LinkedIn post content."""
                 break  # Just get one relevant section
 
         if pillar_mentions:
-            return f"\nStrategy Context:\n{pillar_mentions[0]}\n"
+            label = "Strategy Context" if self._is_draper_project() else "Content Plan Context"
+            return f"\n{label}:\n{pillar_mentions[0]}\n"
+
+        # For non-Draper, still surface a slice of the content plan
+        if not self._is_draper_project():
+            snippet = strategy_doc[:800].strip()
+            if snippet:
+                return f"\nContent Plan Context:\n{snippet}\n"
 
         return "Use general best practices for this pillar."
 
     def _get_hook_examples(self, hook_type: str) -> List[str]:
-        """Get example hooks for a specific type
+        """Get example hooks for a specific type.
 
-        Enhanced with hook formulas from knowledge-work-plugins/marketing
+        Draper-themed AI-agent examples are only returned for the Draper
+        brand project. Other brands get generic pattern formulas only (no
+        product-specific framing).
         """
+        if not self._is_draper_project():
+            return self._get_generic_hook_examples(hook_type)
+
         examples = {
             "contrarian": [
                 "Everyone says AI agents are the future. They're wrong — the future is already here.",
@@ -729,6 +842,66 @@ FORMAT: Return ONLY the LinkedIn post content."""
                 "The biggest mistake I made with AI content: treating it like a volume game.",
                 "We shipped an agent that confidently did the wrong thing for 3 weeks.",
                 "I used to think more content meant more reach. I was wrong.",
+            ],
+        }
+        return examples.get(hook_type, [])
+
+    def _get_generic_hook_examples(self, hook_type: str) -> List[str]:
+        """Neutral hook examples without Draper / AI-agent product framing."""
+        examples = {
+            "contrarian": [
+                "Unpopular opinion: more content is not a strategy.",
+                "Everyone optimizes for reach. The winners optimize for trust.",
+                "I stopped chasing virality and our pipeline got healthier.",
+                "Most teams don't need another channel — they need a clearer message.",
+            ],
+            "question": [
+                "When was the last time a piece of content actually changed a decision?",
+                "Is your content strategy working, or just keeping everyone busy?",
+                "What would you stop publishing if quality were the only metric?",
+                "Who is this for — and who is it not for?",
+            ],
+            "story": [
+                "Last quarter we killed our favorite campaign. Here's what happened next.",
+                "I almost shipped the wrong message to the wrong audience.",
+                "A customer reply changed how we talk about the product.",
+                "Our first draft was safe. The rewrite that worked was specific.",
+            ],
+            "statistic": [
+                "We analyzed 10,000 posts. Only a small fraction drove meaningful engagement.",
+                "Most landing pages lose half their visitors in the first few seconds.",
+                "Teams that review weekly ship clearer messaging than teams that review monthly.",
+                "Focus beats volume: fewer pieces, stronger outcomes.",
+            ],
+            "list_preview": [
+                "5 patterns that separate useful content from noise:",
+                "3 mistakes every team makes when scaling publishing:",
+                "The 4-step framework we use before we hit publish:",
+                "7 editing checks that catch off-brand drafts early:",
+            ],
+            "bold_claim": [
+                "Your content strategy is broken — not because of the words, because of the workflow.",
+                "The best marketing teams don't create more content — they create better systems.",
+                "Clarity beats cleverness when the stakes are high.",
+                "If the hook could fit any brand, it fits none.",
+            ],
+            "empathy": [
+                "You know that feeling when you spend hours on content and it gets zero engagement?",
+                "If you're drowning in calendars and approval chains, you're not alone.",
+                "Every founder I talk to has the same problem: too many ideas, not enough published.",
+                "Explaining what you build shouldn't be harder than building it.",
+            ],
+            "before_after": [
+                "Before: 20 hours/week on content. After: 3 hours. Here's the system.",
+                "We went from sporadic posts to a steady cadence without adding headcount.",
+                "Last quarter: low engagement. This quarter: clearer positioning, better replies.",
+                "Same team, different review loop — and the drafts finally sounded like us.",
+            ],
+            "confession": [
+                "I've been generating content the wrong way for 2 years. Here's what I fixed.",
+                "The biggest mistake I made: treating publishing like a volume game.",
+                "I used to think more content meant more reach. I was wrong.",
+                "We kept a campaign alive longer than the message deserved.",
             ],
         }
         return examples.get(hook_type, [])
@@ -1314,7 +1487,7 @@ FORMAT: Return ONLY the LinkedIn post content."""
             rules = self.REPURPOSE_RULES.get(target, self.REPURPOSE_RULES["twitter"])
             adaptations = "\n".join(f"  • {a}" for a in rules["adaptations"])
 
-            prompt = f"""You are a content repurposing specialist for Draper.
+            prompt = f"""You are a content repurposing specialist for {self._project_display_name()}.
 
 {brand_voice_context}
 
@@ -1698,12 +1871,12 @@ FORMAT: Return ONLY the {target} post content."""
         hook_type = self._select_hook()
         hook_guidance = self._get_hook_pattern_guidance(hook_type, "linkedin")
 
-        prompt = f"""You are a social media carousel designer for Draper, an AI-powered autonomous agent platform.
+        prompt = f"""You are a social media carousel designer for {self._project_display_name()}.
 
 {brand_voice_context}
 
 CONTENT PILLAR: {pillar.replace('_', ' ').upper()}
-TOPIC: {topic or 'AI agents/autonomous systems'}
+TOPIC: {topic or ('AI agents/autonomous systems' if self._is_draper_project() else 'themes from the brand guidelines and content plan')}
 
 CAROUSEL ARCHETYPE: {archetype}
 Description: {archetype_info['description']}
@@ -1858,7 +2031,7 @@ FORMAT: Return the complete blog post with headline, body sections, conclusion, 
         brand_voice_context = self._get_brand_voice_context("email")
         cta_suggestions = self._get_cta_suggestions("email")
 
-        prompt = f"""You are an email marketer for Draper.
+        prompt = f"""You are an email marketer for {self._project_display_name()}.
 
 {brand_voice_context}
 
@@ -1897,14 +2070,14 @@ FORMAT: Return the complete email with subject line options, preview text, body,
         brand_voice_context = self._get_brand_voice_context("web")
         cta_suggestions = self._get_cta_suggestions("landing_page")
 
-        prompt = f"""You are a conversion copywriter for Draper.
+        prompt = f"""You are a conversion copywriter for {self._project_display_name()}.
 
 {brand_voice_context}
 
 CONTENT PILLAR: {pillar.replace('_', ' ').upper()}
 {strategy_context}
 
-TASK: Write landing page copy for {topic or 'AI agents/autonomous systems'}.
+TASK: Write landing page copy for {topic or ('AI agents/autonomous systems' if self._is_draper_project() else 'themes from the brand guidelines and content plan')}.
 
 LANDING PAGE STRUCTURE:
 1. **Headline** -- primary benefit in under 10 words
@@ -1936,7 +2109,7 @@ FORMAT: Return complete landing page copy with all sections.
         """Build prompt for press release generation"""
         brand_voice_context = self._get_brand_voice_context("pr")
 
-        prompt = f"""You are a PR professional for Draper.
+        prompt = f"""You are a PR professional for {self._project_display_name()}.
 
 {brand_voice_context}
 
@@ -1974,7 +2147,7 @@ FORMAT: Return complete press release with headline, dateline, body, boilerplate
         brand_voice_context = self._get_brand_voice_context("web")
         cta_suggestions = self._get_cta_suggestions("blog")
 
-        prompt = f"""You are a content marketer for Draper.
+        prompt = f"""You are a content marketer for {self._project_display_name()}.
 
 {brand_voice_context}
 

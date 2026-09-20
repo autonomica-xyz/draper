@@ -363,6 +363,36 @@ class ReviewWorkflowService:
         self._persist(review_id, record)
         return ReviewRecord.from_dict(record)
 
+    def fail_auto_fix(
+        self,
+        review_id: str,
+        reason: str,
+        error: str = "",
+    ) -> Optional[ReviewRecord]:
+        """Record an auto-fix skip/failure WITHOUT changing the review status.
+
+        Called by ``JobRunner._fix_content`` when the AutoFixEngine refuses to
+        produce content (e.g. ``AutoFixSkipped`` for concrete feedback with no
+        LLM available). The review stays in its current status (normally
+        ``needs_work``); ``auto_fix_status`` is set to ``skipped`` with the
+        reason recorded so the queued marker does not dangle. Unlike
+        ``complete_auto_fix`` this never fabricates fixed content and never
+        resets the review to pending_review.
+
+        Returns the updated typed record, or None if the review no longer
+        exists (e.g. deleted while the worker ran).
+        """
+        record = self.feedback_manager._load_review_record(review_id)
+        if record is None:
+            return None
+
+        record["auto_fix_status"] = "skipped"
+        record["auto_fix_skip_reason"] = reason
+        if error:
+            record["auto_fix_error"] = error[:500]
+        self._persist(review_id, record)
+        return ReviewRecord.from_dict(record)
+
     def _record_history(
         self,
         record: dict,

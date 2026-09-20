@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -14,8 +15,13 @@ load_dotenv(Path(__file__).parent / ".env")
 
 
 def get_data_dir() -> Path:
-    """Get data directory, creating if needed."""
-    data_dir = Path(__file__).parent / "data"
+    """Resolve data directory (mirrors dashboard / ProjectManager).
+
+    Order: ``DRAPER_DATA_DIR`` env if set, else ``<repo>/data``.
+    Creates the directory if needed.
+    """
+    env_dir = os.environ.get("DRAPER_DATA_DIR")
+    data_dir = Path(env_dir) if env_dir else Path(__file__).parent / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
 
@@ -29,7 +35,7 @@ def main(argv=None) -> int:
         "--data-dir",
         type=str,
         default=None,
-        help="Path to data directory (default: <repo>/data).",
+        help="Path to data directory (default: DRAPER_DATA_DIR or <repo>/data).",
     )
     parser.add_argument(
         "--poll-interval",

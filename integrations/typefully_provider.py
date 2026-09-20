@@ -39,7 +39,7 @@ class TypefullyProvider(PublishingProvider):
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "draper/1.0"
+            "User-Agent": "marketing-pipeline/1.0"
         }
 
     def _get_social_sets(self) -> List[Dict]:

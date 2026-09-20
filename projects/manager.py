@@ -248,6 +248,10 @@ class ProjectManager:
         """Get project by name (case-insensitive); returns legacy shape."""
         return self._project_to_legacy(self.service.get_project_by_name(name))
 
+    def get_project_by_slug(self, slug: str) -> Optional[Project]:
+        """Get project by slug; returns legacy shape."""
+        return self._project_to_legacy(self.service.get_project_by_slug(slug))
+
     def list_projects(self) -> List[Project]:
         """List all projects (legacy shape projected from canonical)."""
         return [

@@ -36,6 +36,7 @@ from mcp.server.mcpserver import MCPServer
 from data.sqlite_store import SQLiteStore
 from feedback.manager import FeedbackManager
 from generator.llm_content_generator import LLMContentGenerator
+from mcp_server.long_form_content import content_from_long_form_result
 from data.review_models import ReviewAction
 from services.project_service import ProjectService
 from services.access_control import (
@@ -498,7 +499,12 @@ def generate_long_form(
 
     try:
         result = fn(topic=topic) if topic else fn()
-        content = result if isinstance(result, str) else str(result)
+        content = content_from_long_form_result(result)
+        if not content.strip():
+            return {
+                "success": False,
+                "error": "Long-form generator returned empty content",
+            }
     except Exception as e:
         print(f"MCP long-form generation failed: {e}")
         return {"success": False, "error": "Generation failed"}
@@ -860,6 +866,53 @@ def generate_ideas(
             raise AccessDeniedError("Source material does not belong to the requested project")
         return _safe(IDEA_LAB.generate_ideas_from_material(material_id, pid))
     return _safe(IDEA_LAB.generate_ideas_for_project(pid))
+
+
+
+@mcp.tool()
+def trigger_idea_mining(
+    project_id: Optional[str] = None,
+    max_ideas: int = 5,
+    enqueue: bool = True,
+) -> Dict:
+    """Trigger Idea Lab mining for a project (draft ideas only).
+
+    By default enqueues a ``mine_ideas`` worker job. Set enqueue=False to run
+    synchronously via IdeaLab.mine_ideas. Ideas stay in draft until approved.
+
+    Args:
+        project_id: Target project (defaults to current).
+        max_ideas: Cap on ideas to produce (1-20).
+        enqueue: Queue a background job (True) or run sync (False).
+    """
+    pid = _require_project(project_id, "editor", "trigger_idea_mining")
+    capped = max(1, min(int(max_ideas or 5), 20))
+    if enqueue:
+        job = JOB_QUEUE.enqueue(
+            "mine_ideas",
+            project_id=pid,
+            payload={"project_id": pid, "max_ideas": capped},
+        )
+        return {
+            "success": True,
+            "mode": "queued",
+            "job_id": job.get("job_id"),
+            "project_id": pid,
+            "max_ideas": capped,
+        }
+    ideas = IDEA_LAB.mine_ideas(project_id=pid, max_ideas=capped) or []
+    idea_ids = [
+        (i.get("idea_id") if isinstance(i, dict) else getattr(i, "idea_id", None))
+        for i in ideas
+    ]
+    idea_ids = [i for i in idea_ids if i]
+    return {
+        "success": True,
+        "mode": "sync",
+        "project_id": pid,
+        "idea_ids": idea_ids,
+        "count": len(idea_ids),
+    }
 
 
 @mcp.tool()
@@ -1297,7 +1350,7 @@ def get_project_settings(project_id: Optional[str] = None) -> Dict:
     Args:
         project_id: Target project.
     """
-    pid = _require_project(project_id, "owner", "get_project_settings")
+    pid = _require_project(project_id, "viewer", "get_project_settings")
     settings = PROJECT_MANAGER.get_project_settings(pid)
     return {"project_id": pid, "settings": settings}
 

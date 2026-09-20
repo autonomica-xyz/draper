@@ -58,7 +58,7 @@ Get your key: https://app.getlate.dev/settings/api
 Run the interactive setup script:
 
 ```bash
-cd /opt/draper
+cd /opt/draper/marketing-pipeline
 ./scripts/setup-providers.sh
 ```
 

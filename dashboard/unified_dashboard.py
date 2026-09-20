@@ -49,7 +49,6 @@ from dashboard.routes.reviews import ApproveContentRequest
 
 __all__ = ["ApproveContentRequest", "UnifiedDashboard", "_validation_error_message", "main"]
 
-
 class UnifiedDashboard:
     """Dashboard runtime container retained for test compatibility."""
 
@@ -188,6 +187,10 @@ class UnifiedDashboard:
                     "feedback": review.get("feedback"),
                     "media": review.get("media", []),
                     "status": review.get("status"),
+                    "scheduling_error": review.get("scheduling_error"),
+                    "auto_fix_status": review.get("auto_fix_status"),
+                    "auto_fix_skip_reason": review.get("auto_fix_skip_reason"),
+                    "auto_fix_error": review.get("auto_fix_error"),
                 }
             )
         # Nostr sign-now-publish-later: unsigned approved items stay in the Pipeline.
@@ -231,7 +234,6 @@ class UnifiedDashboard:
         }
         self.store.save_scheduled_record(scheduled_post)
         return scheduled_post["post_id"]
-
 
 def main():
     """Run the unified dashboard server (bootstrap-only)."""
@@ -293,7 +295,6 @@ def main():
         app = build_app(container, host=args.host)
         print(f"Starting unified dashboard on http://{args.host}:{args.port}")
         uvicorn.run(app, host=args.host, port=args.port)
-
 
 if __name__ == "__main__":
     main()
