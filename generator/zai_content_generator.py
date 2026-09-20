@@ -22,10 +22,14 @@ class ZAIContentGenerator:
         self.strategies_path = Path(strategies_path)
         self.project = project
 
-        # Load marketing strategies
-        self.twitter_strategy = self._load_strategy_file("draper_twitter_strategy.md")
-        self.linkedin_strategy = self._load_strategy_file("draper_linkedin_strategy.md")
-        self.marketing_plan = self._load_strategy_file("draper_marketing_plan_enhanced.md")
+        # Global draper_* strategy docs are Draper-brand only.
+        self.twitter_strategy = ""
+        self.linkedin_strategy = ""
+        self.marketing_plan = ""
+        self._draper_strategies_loaded = False
+        self._loaded_strategy_filenames: list[str] = []
+        if self._is_draper_project():
+            self._ensure_draper_strategies()
 
         # ZAI API configuration - Try multiple endpoints
         self.api_key = self._load_zai_key()
@@ -111,15 +115,131 @@ class ZAIContentGenerator:
         """Load ZAI API key from environment or auth profiles"""
         # Check environment variable first
         env_key = os.getenv("ZAI_API_KEY", "")
-        return env_key
+        if env_key:
+            return env_key
+
+        # Fallback to auth profiles
+        try:
+            auth_file = Path.home() / ".clawdbot" / "agents" / "main" / "agent" / "auth-profiles.json"
+            if auth_file.exists():
+                with open(auth_file, 'r') as f:
+                    data = json.load(f)
+                    for profile_name, profile in data.get('profiles', {}).items():
+                        if profile.get('provider') == 'zai':
+                            return profile.get('key', '')
+        except Exception as e:
+            print(f"Warning: Could not load ZAI API key: {e}")
+
+        return ""
 
     def _load_strategy_file(self, filename: str) -> str:
         """Load marketing strategy markdown file"""
         filepath = self.strategies_path / filename
         if filepath.exists():
+            loaded = getattr(self, "_loaded_strategy_filenames", None)
+            if loaded is None:
+                self._loaded_strategy_filenames = []
+                loaded = self._loaded_strategy_filenames
+            if filename not in loaded:
+                loaded.append(filename)
             with open(filepath, 'r') as f:
                 return f.read()
         return ""
+
+    def _is_draper_project(self) -> bool:
+        """True only when the bound project is the Draper brand."""
+        if not self.project:
+            return False
+        for obj in (
+            self.project,
+            getattr(self.project, "config", None),
+            getattr(self.project, "settings", None),
+        ):
+            if obj is None:
+                continue
+            if isinstance(obj, dict):
+                if "use_draper_strategy" in obj:
+                    return bool(obj["use_draper_strategy"])
+            else:
+                flag = getattr(obj, "use_draper_strategy", None)
+                if flag is not None:
+                    return bool(flag)
+        for attr in ("slug", "project_id", "name"):
+            raw = str(getattr(self.project, attr, "") or "").strip().lower()
+            if not raw:
+                continue
+            if raw == "draper" or raw.startswith("draper-") or raw.startswith("draper_"):
+                return True
+            if attr == "name" and (raw == "draper" or raw.startswith("draper ")):
+                return True
+        return False
+
+    def _ensure_draper_strategies(self) -> None:
+        if self._draper_strategies_loaded:
+            return
+        self.twitter_strategy = self._load_strategy_file("draper_twitter_strategy.md")
+        self.linkedin_strategy = self._load_strategy_file("draper_linkedin_strategy.md")
+        self.marketing_plan = self._load_strategy_file("draper_marketing_plan_enhanced.md")
+        self._draper_strategies_loaded = True
+
+    def _project_display_name(self) -> str:
+        if not self.project:
+            return "this brand"
+        name = getattr(self.project, "name", None)
+        if name:
+            return str(name)
+        slug = getattr(self.project, "slug", None)
+        if slug:
+            return str(slug)
+        return "this brand"
+
+    def _load_project_content_plan(self) -> str:
+        if not self.project:
+            return ""
+        project_id = getattr(self.project, "project_id", None)
+        if not project_id:
+            return ""
+        try:
+            from projects.manager import ProjectManager
+            pm = ProjectManager()
+            content = pm.get_content_plan(project_id)
+            if content and content.strip():
+                return content.strip()
+        except Exception:
+            pass
+        plan_path = self.strategies_path / "data" / "projects" / project_id / "content_plan.md"
+        if plan_path.exists():
+            try:
+                return plan_path.read_text().strip()
+            except Exception:
+                pass
+        return ""
+
+    def _brand_context_block(self) -> str:
+        """Project-scoped framing; never inject Draper product copy for other brands."""
+        if self._is_draper_project():
+            return (
+                "You are a content creator for Draper, an AI-powered autonomous agent platform.\n\n"
+                "CONTEXT ABOUT DRAPER:\n"
+                "- We build autonomous AI agents that run businesses\n"
+                "- Key focus: building in public, radical transparency, technical excellence\n"
+                "- Target audience: AI researchers, founders, developers, tech enthusiasts\n"
+                "- Tone: authentic, technical but accessible, not corporate"
+            )
+        name = self._project_display_name()
+        return (
+            f"You write social content for {name}.\n\n"
+            "CONTEXT:\n"
+            "- Follow the brand voice guidelines and content plan for this project.\n"
+            "- Do not invent a different product, company, or audience.\n"
+            "- Do not write about unrelated products (including generic AI-agent platforms) "
+            "unless the brand voice says so."
+        )
+
+    def _default_topic(self) -> str:
+        if self._is_draper_project():
+            return "AI agents/autonomous systems"
+        return "themes from the brand guidelines and content plan"
 
     def _call_zai(self, prompt: str, max_tokens: int = 2000) -> str:
         """Call ZAI API with prompt"""
@@ -241,7 +361,7 @@ class ZAIContentGenerator:
             "suggested_actions": [
                 "Review content for accuracy and tone",
                 "Add specific metrics or data points if applicable",
-                "Check that hook matches Draper's voice",
+                "Check that hook matches the project brand voice",
                 "Ensure thread flows logically between tweets"
             ],
             "generated_at": generated_at
@@ -262,20 +382,14 @@ class ZAIContentGenerator:
         learning_section = self._format_learning_patterns(learning_patterns)
         learning_block = f"\nLEARNING PATTERNS:\n{learning_section}\n" if learning_section else ""
 
-        prompt = f"""You are a content creator for Draper, an AI-powered autonomous agent platform.
-
-CONTEXT ABOUT DRAPER:
-- We build autonomous AI agents that run businesses
-- Key focus: building in public, radical transparency, technical excellence
-- Target audience: AI researchers, founders, developers, tech enthusiasts
-- Tone: authentic, technical but accessible, not corporate
+        prompt = f"""{self._brand_context_block()}
 
 CONTENT PILLAR: {pillar.replace('_', ' ').upper()}
 {strategy_context}
 
 HOOK TYPE: {hook_type.upper()}
 {learning_block}
-TASK: Generate a Twitter/X thread (6-8 tweets total) about {topic or 'AI agents/autonomous systems'}.
+TASK: Generate a Twitter/X thread (6-8 tweets total) about {topic or self._default_topic()}.
 
 REQUIREMENTS:
 1. Start with a strong {hook_type} hook (first tweet)
@@ -358,20 +472,14 @@ Examples of good hooks for {hook_type}:
         learning_section = self._format_learning_patterns(learning_patterns)
         learning_block = f"\nLEARNING PATTERNS:\n{learning_section}\n" if learning_section else ""
 
-        prompt = f"""You are a content creator for Draper, an AI-powered autonomous agent platform.
-
-CONTEXT ABOUT DRAPER:
-- We build autonomous AI agents that run businesses
-- Key focus: enterprise adoption, technical excellence, real-world use cases
-- Target audience: CTOs, engineering leads, product managers, founders
-- Tone: professional but authentic, data-driven, not corporate jargon
+        prompt = f"""{self._brand_context_block()}
 
 CONTENT PILLAR: {pillar.replace('_', ' ').upper()}
 {strategy_context}
 
 CONTENT TYPE: {content_type}
 {learning_block}
-TASK: Generate a LinkedIn post about {topic or 'AI agents/autonomous systems'}.
+TASK: Generate a LinkedIn post about {topic or self._default_topic()}.
 
 REQUIREMENTS:
 1. Start with a compelling hook or story (first 2-3 lines are critical)
@@ -389,11 +497,17 @@ FORMAT: Return ONLY the LinkedIn post content."""
         return prompt
 
     def _extract_strategy_context(self, pillar: str, platform: str) -> str:
-        """Extract relevant strategy context from marketing documents"""
-        strategy_doc = self.twitter_strategy if platform == "twitter" else self.linkedin_strategy
+        """Extract strategy context; draper_* files only for Draper brand."""
+        if self._is_draper_project():
+            self._ensure_draper_strategies()
+            strategy_doc = self.twitter_strategy if platform == "twitter" else self.linkedin_strategy
+        else:
+            strategy_doc = self._load_project_content_plan()
 
         if not strategy_doc:
-            return "No specific strategy context available."
+            if self._is_draper_project():
+                return "No specific strategy context available."
+            return "Use the project's brand voice and content plan. Do not invent unrelated products."
 
         # Extract sections relevant to pillar
         pillar_mentions = []
@@ -413,7 +527,36 @@ FORMAT: Return ONLY the LinkedIn post content."""
         return "Use general best practices for this pillar."
 
     def _get_hook_examples(self, hook_type: str) -> List[str]:
-        """Get example hooks for a specific type"""
+        """Get example hooks; Draper/AI-agent phrasing only for Draper brand."""
+        if not self._is_draper_project():
+            generic = {
+                "curiosity": [
+                    "I've been wrong about our content process for 2 years.",
+                    "The real reason campaigns fail isn't the channel.",
+                    "We cut our review cycle in half last month.",
+                    "Nobody talks about message consistency enough.",
+                ],
+                "story": [
+                    "Last week a draft almost went out with the wrong brand voice.",
+                    "I almost killed our best-performing series 3 months ago.",
+                    "Two years ago I thought more posts meant more pipeline.",
+                    "A customer reply changed how we talk about the product.",
+                ],
+                "value": [
+                    "How to tighten your content review loop (5 steps):",
+                    "3 patterns that make publishing reliable:",
+                    "The simplest way to catch off-brand drafts:",
+                    "Stop optimizing for volume. Use this instead:",
+                ],
+                "contrarian": [
+                    "Unpopular opinion: more content is not a strategy.",
+                    "Channel expansion is wrong for most early teams.",
+                    "I stopped chasing virality and got better results.",
+                    "Most teams don't need another tool — they need clearer messaging.",
+                ],
+            }
+            return generic.get(hook_type, [])
+
         examples = {
             "curiosity": [
                 "I've been wrong about AI agents for 2 years.",

@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekday Idea Lab mining (Mon–Fri 06:00 UTC)
+Requires=draper-idea-mining.service
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 06:00:00 UTC
+Persistent=true
+Unit=draper-idea-mining.service
+
+[Install]
+WantedBy=timers.target

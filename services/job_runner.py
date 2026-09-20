@@ -286,15 +286,57 @@ class JobRunner:
             }
         post_data = record.get("post_data") or {}
 
-        from learning.auto_fix import AutoFixEngine
+        from learning.auto_fix import AutoFixEngine, AutoFixSkipped
 
-        fix = asyncio.run(
-            AutoFixEngine().fix_content(
-                post_data=post_data,
-                feedback=feedback,
-                project_id=project_id,
+        try:
+            fix = asyncio.run(
+                AutoFixEngine().fix_content(
+                    post_data=post_data,
+                    feedback=feedback,
+                    project_id=project_id,
+                )
             )
-        )
+        except AutoFixSkipped as exc:
+            # The engine refused to honor concrete feedback without an LLM.
+            # Do NOT fabricate a fix: leave the review in needs_work and
+            # record the skip so auto_fix_status doesn't dangle on "queued".
+            logger.warning(
+                "job.fix_content.skipped_concrete_feedback",
+                extra={
+                    "job_id": job.get("job_id"),
+                    "review_id": review_id,
+                    "reason": exc.reason,
+                },
+            )
+            self._abandon_auto_fix(review_id, reason=exc.reason, error=str(exc))
+            return {
+                "review_id": review_id,
+                "skipped": True,
+                "reason": exc.reason,
+                "detail": str(exc),
+            }
+
+        if not isinstance(fix, dict) or fix.get("skipped"):
+            # Defensive: engine returned a structured skip instead of raising.
+            reason = (
+                fix.get("reason", "unknown")
+                if isinstance(fix, dict)
+                else "invalid_fix_result"
+            )
+            logger.warning(
+                "job.fix_content.skipped_no_fix",
+                extra={
+                    "job_id": job.get("job_id"),
+                    "review_id": review_id,
+                    "reason": reason,
+                },
+            )
+            self._abandon_auto_fix(review_id, reason=reason)
+            return {
+                "review_id": review_id,
+                "skipped": True,
+                "reason": reason,
+            }
 
         from services.review_workflow_service import INVALID_TRANSITION, ReviewTransitionError
 
@@ -323,6 +365,21 @@ class JobRunner:
             "status": "pending_review",
             "explanation": fix.get("explanation", ""),
         }
+
+    def _abandon_auto_fix(self, review_id: str, reason: str, error: str = "") -> None:
+        """Record an auto-fix skip on the review without changing its status.
+
+        The review stays in needs_work; ``auto_fix_status`` moves from
+        ``queued`` to ``skipped`` with the reason recorded. Never invents a
+        successful fix.
+        """
+        try:
+            self.review_workflow.fail_auto_fix(review_id, reason=reason, error=error)
+        except Exception as exc:
+            logger.warning(
+                "job.fix_content.fail_auto_fix_error",
+                extra={"review_id": review_id, "error": str(exc)},
+            )
 
     def _generate_visual(self, job: Dict[str, Any]) -> Dict[str, Any]:
         payload = job.get("payload") or {}

@@ -606,6 +606,96 @@ def cmd_scheduler_tick(args):
     return 0
 
 
+def cmd_idea_mining_tick(args):
+    """Enqueue mine_ideas jobs for projects with idea_mining.enabled."""
+    from dotenv import load_dotenv
+    load_dotenv()
+    from dashboard.app_container import AppContainer
+    from services.idea_mining_producer import IdeaMiningProducer
+
+    data_dir = Path(args.data_dir) if args.data_dir else get_data_dir()
+    container = AppContainer(data_dir=str(data_dir))
+    dry_run = bool(getattr(args, "dry_run", False))
+    force = getattr(args, "force_project", None) or None
+    producer = IdeaMiningProducer(container, dry_run=dry_run)
+
+    if dry_run:
+        original = container.job_queue.enqueue
+        calls = []
+
+        def _stub(*a, **kw):
+            calls.append((a, kw))
+            return {"job_id": "dry-run"}
+
+        container.job_queue.enqueue = _stub
+        try:
+            result = producer.tick(force_project_id=force)
+        finally:
+            container.job_queue.enqueue = original
+        print(json.dumps({"dry_run": True, "would_enqueue": result["enqueued"], **result}, default=str))
+        return 0
+
+    result = producer.tick(force_project_id=force)
+    print(json.dumps(result, default=str))
+    return 0
+
+
+def cmd_idea_mining_enable(args):
+    """Enable idea_mining on a project config (idempotent)."""
+    from dotenv import load_dotenv
+    load_dotenv()
+    from dashboard.app_container import AppContainer
+    from services.idea_mining_producer import resolve_idea_mining_config
+
+    data_dir = Path(args.data_dir) if args.data_dir else get_data_dir()
+    container = AppContainer(data_dir=str(data_dir))
+    target = args.project
+    pm = container.project_manager
+    project = pm.get_project(target)
+    if project is None:
+        getter = getattr(pm, "get_project_by_slug", None)
+        if callable(getter):
+            project = getter(target)
+    if project is None:
+        record = None
+        store = container.store
+        by_slug = getattr(store, "get_project_record_by_slug", None)
+        if callable(by_slug):
+            record = by_slug(target)
+        if record is None:
+            by_name = getattr(store, "get_project_record_by_name", None)
+            if callable(by_name):
+                record = by_name(target)
+        if record:
+            project = pm.get_project(record["project_id"])
+    if project is None:
+        getter = getattr(pm, "get_project_by_name", None)
+        if callable(getter):
+            project = getter(target)
+    if not project:
+        print(json.dumps({"success": False, "error": f"project not found: {target}"}))
+        return 1
+    pid = project.project_id
+    record = container.store.get_project_record(pid) or {}
+    config = dict(record.get("config") or {})
+    mining = resolve_idea_mining_config(record)
+    mining["enabled"] = True
+    if getattr(args, "frequency", None):
+        mining["frequency"] = args.frequency
+    if getattr(args, "max_ideas", None) is not None:
+        mining["max_ideas"] = int(args.max_ideas)
+    config["idea_mining"] = mining
+    container.project_manager.update_project(pid, **{"idea_mining": mining})
+    # ensure nested config persisted even if update_project flattens
+    record = container.store.get_project_record(pid) or {}
+    cfg = dict(record.get("config") or {})
+    cfg["idea_mining"] = mining
+    record["config"] = cfg
+    container.store.save_project_record(record)
+    print(json.dumps({"success": True, "project_id": pid, "idea_mining": mining}))
+    return 0
+
+
 def cmd_jobs_recover(args):
     """Mark stuck (long-running) jobs as failed so they can be re-enqueued."""
     from dotenv import load_dotenv
@@ -859,14 +949,16 @@ def cmd_ideas_idea_delete(args):
 
 
 def cmd_ideas_mine(args):
-    """Placeholder for mining trigger."""
-    print("Mining is not yet implemented — coming in M003.")
-    return 0
+    """Enqueue mine_ideas for a project (uses idea-mining producer with --force)."""
+    class _Args:
+        data_dir = getattr(args, "data_dir", None)
+        dry_run = False
+        force_project = getattr(args, "project_id", None)
+    if not _Args.force_project:
+        print("Error: --project-id is required")
+        return 1
+    return cmd_idea_mining_tick(_Args())
 
-
-# =============================================================================
-# Main
-# =============================================================================
 
 def main():
     parser = argparse.ArgumentParser(
@@ -941,6 +1033,37 @@ def main():
         "--dry-run", action="store_true", help="Print what would be enqueued"
     )
     scheduler_tick_cmd.set_defaults(func=cmd_scheduler_tick)
+
+
+    # idea-mining (autonomic Idea Lab)
+    idea_mining_parser = subparsers.add_parser(
+        "idea-mining", help="Idea Lab mining producer commands"
+    )
+    idea_mining_sub = idea_mining_parser.add_subparsers(dest="idea_mining_command")
+    idea_mining_tick = idea_mining_sub.add_parser(
+        "tick", help="Enqueue mine_ideas jobs for due enabled projects"
+    )
+    idea_mining_tick.add_argument("--data-dir", help="Data directory")
+    idea_mining_tick.add_argument(
+        "--dry-run", action="store_true", help="Print what would be enqueued"
+    )
+    idea_mining_tick.add_argument(
+        "--force-project",
+        help="Force a single project_id (bypasses enabled/due checks for that project)",
+    )
+    idea_mining_tick.set_defaults(func=cmd_idea_mining_tick)
+    idea_mining_enable = idea_mining_sub.add_parser(
+        "enable", help="Enable idea_mining on a project (idempotent)"
+    )
+    idea_mining_enable.add_argument("project", help="Project id, slug, or name")
+    idea_mining_enable.add_argument(
+        "--frequency",
+        choices=["daily", "weekdays", "weekly"],
+        default="weekdays",
+    )
+    idea_mining_enable.add_argument("--max-ideas", type=int, default=5)
+    idea_mining_enable.add_argument("--data-dir", help="Data directory")
+    idea_mining_enable.set_defaults(func=cmd_idea_mining_enable)
 
     # jobs (recovery)
     jobs_parser = subparsers.add_parser("jobs", help="Job queue commands")
@@ -1066,6 +1189,10 @@ def main():
 
     if args.command == "scheduler" and not hasattr(args, "func"):
         scheduler_parser.print_help()
+    if args.command == "idea-mining" and not hasattr(args, "func"):
+        idea_mining_parser.print_help()
+        return 0
+        return 0
         return 0
 
     if args.command == "jobs" and not hasattr(args, "func"):

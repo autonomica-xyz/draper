@@ -116,6 +116,10 @@ def attach_pipeline_nostr_requests(
                 "feedback": review.get("feedback"),
                 "media": review.get("media", []),
                 "status": review.get("status"),
+                "scheduling_error": review.get("scheduling_error"),
+                "auto_fix_status": review.get("auto_fix_status"),
+                "auto_fix_skip_reason": review.get("auto_fix_skip_reason"),
+                "auto_fix_error": review.get("auto_fix_error"),
                 "nostr_request": view,
             }
         )

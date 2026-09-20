@@ -85,19 +85,24 @@ class FeedbackManager:
         return record
 
     def get_pending_reviews(self, limit: int = 100) -> List[Dict]:
-        """Get content pending review, plus approved items whose scheduling failed.
+        """Get content that still needs Pipeline attention.
 
-        Approved records carrying a non-empty scheduling_error never reached
-        the scheduler; they stay visible here so they can be retried instead
-        of silently disappearing from the Pipeline. Successfully scheduled
-        items (no scheduling_error) are excluded.
+        Includes:
+        - ``pending_review`` items awaiting first review
+        - ``needs_work`` items (e.g. after autofix skip) so they do not vanish
+          from the Pipeline UI
+        - ``approved`` items carrying a non-empty ``scheduling_error`` that
+          never reached the scheduler (retry visibility)
+
+        Successfully scheduled items (no scheduling_error) are excluded.
         """
         reviews = self._load_reviews()
 
         def _needs_attention(r: Dict) -> bool:
-            if r.get("status") == "pending_review":
+            status = r.get("status")
+            if status in ("pending_review", "needs_work"):
                 return True
-            return r.get("status") == "approved" and bool(
+            return status == "approved" and bool(
                 str(r.get("scheduling_error") or "").strip()
             )
 

@@ -497,6 +497,34 @@ class TestApplyAutoFixEnqueuesJob:
         stored = service.feedback_manager._load_review_record(review_id)
         assert stored["status"] == "declined"
 
+    def test_fail_auto_fix_leaves_needs_work_and_records_reason(self, tmp_path):
+        """fail_auto_fix records the skip without changing status or content."""
+        service = _build_service(tmp_path)
+        review_id = _seed_pending_review(service)
+        service.transition(review_id, ReviewAction.NEEDS_WORK, feedback="rewrite it")
+        queued = service.feedback_manager._load_review_record(review_id)
+        queued["auto_fix_status"] = "queued"
+        queued["auto_fix_job_id"] = "job-9"
+        service.feedback_manager._save_review_record(review_id, queued)
+
+        result = service.fail_auto_fix(
+            review_id,
+            reason="llm_unavailable_concrete_feedback",
+            error="no llm",
+        )
+
+        assert result.status == ReviewStatus.NEEDS_WORK
+        stored = service.feedback_manager._load_review_record(review_id)
+        assert stored["status"] == "needs_work"
+        assert stored["post_data"]["content"] == "Sample content for testing."
+        assert stored["auto_fix_status"] == "skipped"
+        assert stored["auto_fix_skip_reason"] == "llm_unavailable_concrete_feedback"
+        assert stored["auto_fix_error"] == "no llm"
+
+    def test_fail_auto_fix_unknown_review_returns_none(self, tmp_path):
+        service = _build_service(tmp_path)
+        assert service.fail_auto_fix("missing-123", reason="x") is None
+
 
 class TestJsonFormParityContract:
     """Pin ARCH-03 success criterion #2: JSON and form variants route through the same path."""

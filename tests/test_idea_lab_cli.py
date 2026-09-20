@@ -226,22 +226,43 @@ class TestCLIIdeaCommands:
 
 
 # ===========================================================================
-# Mining Placeholder
+# Mining Command
 # ===========================================================================
 
 
-class TestCLIMiningPlaceholder:
-    """Tests for cli.py ideas mine placeholder command."""
+class TestCLIMiningCommand:
+    """Tests for cli.py ideas mine command (delegates to idea-mining tick)."""
 
-    def test_mine_command_placeholder(self, monkeypatch):
-        from cli import cmd_ideas_mine
-        args = SimpleNamespace(project_id=PROJECT_ID)
+    def test_mine_delegates_to_idea_mining_tick(self, monkeypatch):
         import io
         from contextlib import redirect_stdout
+        from cli import cmd_ideas_mine
+        captured = {}
+
+        def _fake_tick(args):
+            captured["data_dir"] = args.data_dir
+            captured["dry_run"] = args.dry_run
+            captured["force_project"] = args.force_project
+            print(json.dumps({"enqueued": 1, "skipped": []}))
+            return 0
+
+        monkeypatch.setattr("cli.cmd_idea_mining_tick", _fake_tick)
+        args = SimpleNamespace(project_id=PROJECT_ID)
         f = io.StringIO()
         with redirect_stdout(f):
             rc = cmd_ideas_mine(args)
-        output = f.getvalue()
         assert rc == 0
-        assert "not yet implemented" in output.lower()
-        assert "M003" in output
+        assert captured == {
+            "data_dir": None, "dry_run": False, "force_project": PROJECT_ID,
+        }
+
+    def test_mine_requires_project_id(self):
+        import io
+        from contextlib import redirect_stdout
+        from cli import cmd_ideas_mine
+        args = SimpleNamespace(project_id=None)
+        f = io.StringIO()
+        with redirect_stdout(f):
+            rc = cmd_ideas_mine(args)
+        assert rc == 1
+        assert "--project-id is required" in f.getvalue()

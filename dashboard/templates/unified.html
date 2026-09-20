@@ -1649,6 +1649,27 @@
                     {% endif %}
 
                     <div class="divider">
+                        {% if item.status == 'needs_work' %}
+                        <div class="msg msg-warning" style="margin-bottom: var(--space-3);">
+                            {% if item.get("auto_fix_status") == "skipped" %}
+                            <div style="font-weight: 600;">Autofix skipped</div>
+                            <div style="font-size: 0.87rem; margin-top: 2px;">
+                                {{ item.get("auto_fix_skip_reason") or item.get("auto_fix_error") or "Could not apply automatic fix; review feedback and edit manually." }}
+                            </div>
+                            {% elif item.get("auto_fix_status") == "queued" %}
+                            <div style="font-weight: 600;">Needs work — autofix queued</div>
+                            <div style="font-size: 0.87rem; margin-top: 2px;">
+                                {% if item.feedback %}Feedback: {{ item.feedback }}{% else %}Waiting for autofix worker.{% endif %}
+                            </div>
+                            {% else %}
+                            <div style="font-weight: 600;">Needs work</div>
+                            {% if item.feedback %}
+                            <div style="font-size: 0.87rem; margin-top: 2px;">{{ item.feedback }}</div>
+                            {% endif %}
+                            {% endif %}
+                        </div>
+                        {% endif %}
+
                         {% if item.get("scheduling_error") and not (item.get("nostr_request") and item.nostr_request.status == 'pending_signature') %}
                         <div class="msg msg-error" style="margin-bottom: var(--space-3);">
                             Scheduling failed: {{ item.scheduling_error }}
@@ -2756,12 +2777,11 @@
                 btn.classList.add('loading');
                 btn.textContent = 'Generating\u2026';
             }
-            // Will be wired to S02's generate_ideas_from_material endpoint in S05
             fetch('/api/ideas/materials/' + encodeURIComponent(materialId) + '/generate-ideas', {method: 'POST'})
                 .then(r => r.json())
                 .then(data => {
                     if (data.success === false) {
-                        showMessage('materials-message', data.error || 'Idea generation not yet available. Will be wired in a future update.', 'error');
+                        showMessage('materials-message', data.error || 'Idea generation failed.', 'error');
                         if (btn) { btn.classList.remove('loading'); btn.textContent = 'Generate Ideas'; }
                         return;
                     }
@@ -2770,7 +2790,7 @@
                     loadIdeas();
                 })
                 .catch(err => {
-                    showMessage('materials-message', 'Idea generation not yet available. Will be wired in a future update.', 'error');
+                    showMessage('materials-message', (err && err.message) ? err.message : 'Idea generation failed.', 'error');
                     if (btn) { btn.classList.remove('loading'); btn.textContent = 'Generate Ideas'; }
                 });
         }

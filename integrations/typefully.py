@@ -69,7 +69,7 @@ class TypefullyClient:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "User-Agent": "draper/1.0"
+                "User-Agent": "marketing-pipeline/1.0"
             },
             timeout=30.0
         )
@@ -259,7 +259,7 @@ class TypefullySyncClient:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "User-Agent": "draper/1.0"
+                "User-Agent": "marketing-pipeline/1.0"
             },
             timeout=30.0
         )

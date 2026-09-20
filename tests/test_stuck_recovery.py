@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -30,7 +30,9 @@ def _make_stuck_job(store: SQLiteStore, *, age_minutes: int = 60, project_id: st
         project_id=project_id,
     )
     record["status"] = "running"
-    record["started_at"] = (datetime.now() - timedelta(minutes=age_minutes)).isoformat()
+    record["started_at"] = (
+        datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
+    ).isoformat()
     store.save_job_record(record)
     return record["job_id"]
 
@@ -171,7 +173,7 @@ class TestJobsRecoverCleansLinkedReviewState:
         )
         record["job_id"] = "stuck-fix-job-001"
         record["status"] = "running"
-        record["started_at"] = (datetime.now() - timedelta(minutes=60)).isoformat()
+        record["started_at"] = (datetime.now(timezone.utc) - timedelta(minutes=60)).isoformat()
         stuck_store.save_job_record(record)
 
         recovered = stuck_store.recover_stuck_jobs(threshold_minutes=30)
@@ -202,7 +204,7 @@ class TestJobsRecoverCleansLinkedReviewState:
             project_id="p1",
         )
         record["status"] = "running"
-        record["started_at"] = (datetime.now() - timedelta(minutes=60)).isoformat()
+        record["started_at"] = (datetime.now(timezone.utc) - timedelta(minutes=60)).isoformat()
         stuck_store.save_job_record(record)
 
         stuck_store.recover_stuck_jobs(threshold_minutes=30)
@@ -231,7 +233,7 @@ class TestJobsRecoverCleansLinkedReviewState:
             project_id="p1",
         )
         record["status"] = "running"
-        record["started_at"] = (datetime.now() - timedelta(minutes=60)).isoformat()
+        record["started_at"] = (datetime.now(timezone.utc) - timedelta(minutes=60)).isoformat()
         stuck_store.save_job_record(record)
 
         stuck_store.recover_stuck_jobs(threshold_minutes=30)
@@ -251,7 +253,7 @@ class TestJobsRecoverCleansLinkedReviewState:
             project_id="p1",
         )
         record["status"] = "running"
-        record["started_at"] = (datetime.now() - timedelta(minutes=60)).isoformat()
+        record["started_at"] = (datetime.now(timezone.utc) - timedelta(minutes=60)).isoformat()
         stuck_store.save_job_record(record)
 
         recovered = stuck_store.recover_stuck_jobs(threshold_minutes=30)

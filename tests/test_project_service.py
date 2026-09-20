@@ -341,6 +341,17 @@ class TestDashboardFacadeDelegatesToService:
         assert "twitter" in project.config.platforms
         assert project.config.default_platform == "twitter"
 
+    def test_facade_get_project_by_slug_returns_legacy_shape(
+        self, project_data_dir, fixture_project
+    ):
+        """facade.get_project_by_slug delegates to service and returns LegacyProject."""
+        facade = DashboardProjectManager(data_dir=str(project_data_dir))
+        project = facade.get_project_by_slug(fixture_project["slug"])
+
+        assert isinstance(project, LegacyProject)
+        assert project.project_id == FIXTURE_PROJECT_ID
+        assert facade.get_project_by_slug("does-not-exist") is None
+
     def test_facade_get_current_project_returns_legacy_shape(
         self, project_data_dir, fixture_project
     ):
